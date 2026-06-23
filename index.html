@@ -498,6 +498,37 @@ function frame() {
 }
 
 // ---------------------------------------------------------------------------
+// Robust camera acquisition: try progressively looser constraints so external
+// / USB cams (no "user" facing) and odd resolutions still work.
+async function acquireCamera() {
+  const attempts = [
+    { audio: false, video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } } },
+    { audio: false, video: { facingMode: "user" } },
+    { audio: false, video: true },   // last resort: ANY camera
+  ];
+  let lastErr;
+  for (const cons of attempts) {
+    try { return await navigator.mediaDevices.getUserMedia(cons); }
+    catch (e) {
+      lastErr = e;
+      const n = e && e.name;
+      // permission / busy / hardware errors won't be fixed by looser constraints
+      if (n === "NotAllowedError" || n === "SecurityError" || n === "NotReadableError" || n === "TrackStartError") throw e;
+    }
+  }
+  throw lastErr;
+}
+function camMessage(e) {
+  const n = (e && e.name) || "";
+  if (n === "NotAllowedError" || n === "SecurityError")
+    return ["Camera blocked", "Allow the camera for this site, then RETRY — nothing is uploaded. (Brave: click the camera icon in the address bar → Allow.)"];
+  if (n === "NotReadableError" || n === "TrackStartError" || n === "AbortError")
+    return ["Camera busy", "Another app or tab is using the camera. Close other camera tabs (incl. GEECKET STUDIO), and Zoom / FaceTime / Photo Booth, then RETRY."];
+  if (n === "NotFoundError" || n === "DevicesNotFoundError" || n === "OverconstrainedError")
+    return ["No camera found", "No camera is available. On a Mac driving an external monitor with the laptop LID CLOSED (clamshell), the built-in camera is off — open the lid, or plug in a USB / iPhone Continuity camera, then RETRY."];
+  return ["Camera unavailable", "Couldn't start the camera (" + (n || "unknown") + "). Close other camera apps/tabs or try another browser, then RETRY."];
+}
+
 async function start() {
   if (booting) return;
   booting = true;
@@ -509,13 +540,11 @@ async function start() {
   // 1. camera first (keeps iOS user-gesture intact)
   let stream;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } } });
+    stream = await acquireCamera();
   } catch (e) {
     booting = false;
-    return showError(e && e.name === "NotAllowedError" ? "Camera blocked" : "No camera",
-      e && e.name === "NotAllowedError"
-        ? "GEECKET needs the camera to draw you — allow it and hit RETRY. Nothing is uploaded."
-        : "Couldn't reach a camera here. Try another device or browser.");
+    const [t, m] = camMessage(e);
+    return showError(t, m);
   }
   els.cam.srcObject = stream;
   await els.cam.play().catch(() => {});
