@@ -1,0 +1,565 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+<meta name="theme-color" content="#08090a" />
+<title>GEECKET · LIVE FACE</title>
+<meta name="description" content="Step into the GEECKET point-cloud. Real-time face visual, live in your browser." />
+
+<!-- OpenGraph so the link looks good when sent -->
+<meta property="og:title" content="GEECKET · LIVE FACE" />
+<meta property="og:description" content="Become the point-cloud. Tap to enter — camera stays on your device." />
+<meta property="og:type" content="website" />
+
+<style>
+  :root{
+    --lime:#c6ff3a;
+    --purple:#aa3cc8;
+    --grafite:#1c1d1f;
+    --ink:#08090a;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:var(--ink);overflow:hidden;
+    font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;color:#fff}
+  #app{position:fixed;inset:0}
+  canvas{display:block;width:100%;height:100%}
+  /* hidden source video — we only draw the point cloud */
+  #cam{position:absolute;width:2px;height:2px;opacity:0;pointer-events:none;left:-10px;top:-10px}
+
+  /* scanline + vignette overlay (the face3d.py texture pass, in CSS) */
+  #fx{position:fixed;inset:0;pointer-events:none;z-index:5;mix-blend-mode:overlay;opacity:.5;
+    background:
+      repeating-linear-gradient(0deg, rgba(0,0,0,.0) 0 2px, rgba(0,0,0,.35) 2px 3px);}
+  #vig{position:fixed;inset:0;pointer-events:none;z-index:6;
+    background:radial-gradient(120% 120% at 50% 45%, transparent 55%, rgba(0,0,0,.6) 100%);}
+
+  /* ---- intro / gate ---- */
+  #intro{position:fixed;inset:0;z-index:20;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;text-align:center;gap:26px;
+    background:radial-gradient(80% 80% at 50% 40%, #111315 0%, #08090a 70%);
+    transition:opacity .6s ease}
+  .mark{font-weight:800;letter-spacing:.42em;font-size:clamp(34px,9vw,76px);
+    text-indent:.42em;color:#fff;
+    text-shadow:0 0 24px rgba(198,255,58,.35)}
+  .mark b{color:var(--lime);font-weight:800}
+  .sub{font-size:12px;letter-spacing:.5em;text-indent:.5em;color:#8b8f93;text-transform:uppercase}
+  .enter{margin-top:8px;border:1px solid rgba(198,255,58,.6);background:rgba(198,255,58,.06);
+    color:var(--lime);font-weight:700;letter-spacing:.28em;text-indent:.28em;
+    font-size:14px;padding:16px 34px;border-radius:999px;cursor:pointer;
+    transition:transform .15s ease, background .2s ease, box-shadow .3s ease;
+    box-shadow:0 0 0 rgba(198,255,58,0)}
+  .enter:hover{background:rgba(198,255,58,.14);box-shadow:0 0 30px rgba(198,255,58,.25)}
+  .enter:active{transform:scale(.96)}
+  .note{font-size:11px;letter-spacing:.12em;color:#5d6065;max-width:280px;line-height:1.6}
+  .note .pill{color:#9aa0a4}
+
+  /* ---- loading ---- */
+  #load{position:fixed;inset:0;z-index:18;display:none;align-items:center;justify-content:center;
+    flex-direction:column;gap:14px;background:var(--ink)}
+  #load.show{display:flex}
+  .ring{width:38px;height:38px;border-radius:50%;border:2px solid rgba(255,255,255,.12);
+    border-top-color:var(--lime);animation:spin 0.9s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  #load .lbl{font-size:11px;letter-spacing:.4em;text-indent:.4em;color:#8b8f93;text-transform:uppercase}
+
+  /* ---- live HUD ---- */
+  #hud{position:fixed;left:0;right:0;bottom:env(safe-area-inset-bottom);z-index:12;
+    display:none;align-items:center;justify-content:center;gap:10px;padding:16px;
+    pointer-events:none}
+  #hud.show{display:flex}
+  .btn{pointer-events:auto;border:1px solid rgba(255,255,255,.14);background:rgba(20,22,24,.6);
+    backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);color:#cfd2d4;
+    font-size:11px;letter-spacing:.18em;text-indent:.18em;font-weight:600;text-transform:uppercase;
+    padding:11px 16px;border-radius:999px;cursor:pointer;transition:all .18s ease}
+  .btn:active{transform:scale(.95)}
+  .btn.on{color:var(--lime);border-color:rgba(198,255,58,.5);background:rgba(198,255,58,.08)}
+  #brand{position:fixed;top:env(safe-area-inset-top);left:0;right:0;z-index:12;display:none;
+    justify-content:center;padding:18px;pointer-events:none}
+  #brand.show{display:flex}
+  #brand .w{font-weight:800;letter-spacing:.36em;text-indent:.36em;font-size:13px;color:#fff;opacity:.85}
+  #brand .w b{color:var(--lime)}
+
+  /* toast hint */
+  #toast{position:fixed;left:50%;top:52%;transform:translate(-50%,-50%);z-index:14;
+    font-size:12px;letter-spacing:.16em;color:#aeb2b5;background:rgba(10,11,12,.55);
+    padding:10px 16px;border-radius:10px;border:1px solid rgba(255,255,255,.08);
+    opacity:0;transition:opacity .5s ease;text-align:center;line-height:1.7;pointer-events:none}
+  #toast.show{opacity:1}
+
+  /* error */
+  #err{position:fixed;inset:0;z-index:30;display:none;flex-direction:column;gap:16px;
+    align-items:center;justify-content:center;text-align:center;padding:24px;background:var(--ink)}
+  #err.show{display:flex}
+  #err h2{color:var(--lime);letter-spacing:.1em;font-size:18px;margin:0}
+  #err p{color:#9aa0a4;font-size:13px;line-height:1.7;max-width:320px;margin:0}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<video id="cam" playsinline autoplay muted></video>
+
+<div id="fx"></div>
+<div id="vig"></div>
+
+<div id="brand"><span class="w">GEE<b>CKET</b></span></div>
+
+<div id="intro">
+  <div class="mark">GEE<b>CKET</b></div>
+  <div class="sub">Live Face · point&nbsp;cloud</div>
+  <button class="enter" id="enterBtn">ENTER</button>
+  <div class="note">Allow the camera to step inside the cloud.<br/>
+    <span class="pill">Your video never leaves this device</span> — it's drawn, not uploaded.</div>
+</div>
+
+<div id="load"><div class="ring"></div><div class="lbl">summoning the cloud</div></div>
+
+<div id="brand"></div>
+<div id="toast"></div>
+
+<div id="hud">
+  <button class="btn" id="burstBtn">◇ Burst</button>
+  <button class="btn" id="soundBtn">◉ Sound</button>
+  <button class="btn" id="lookBtn">↻ Look</button>
+</div>
+
+<div id="err">
+  <h2 id="errTitle">No camera</h2>
+  <p id="errMsg"></p>
+  <button class="enter" id="retryBtn">RETRY</button>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.171.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.171.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from "three";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
+import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import { FilesetResolver, FaceLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/vision_bundle.mjs";
+
+// ---------------------------------------------------------------------------
+// GEECKET palette (matches face3d.py)
+// ---------------------------------------------------------------------------
+const LIME   = new THREE.Color(0xc6ff3a);
+const PURPLE = new THREE.Color(0xaa3cc8);
+
+// Three "looks" cycled by the ↻ Look button — echo the python looks.
+const LOOKS = [
+  { name: "POINTCLOUD",  size: 2.4, bloom: 0.95, limeMix: 0.62, useVideo: 1.0 },
+  { name: "WIREFRAME",   size: 1.7, bloom: 0.80, limeMix: 0.95, useVideo: 0.15 },
+  { name: "INFRARED",    size: 2.6, bloom: 1.15, limeMix: 0.0,  useVideo: 1.0 },
+];
+let lookIdx = 0;
+
+const els = {
+  cam: document.getElementById("cam"),
+  intro: document.getElementById("intro"),
+  load: document.getElementById("load"),
+  hud: document.getElementById("hud"),
+  brand: document.getElementById("brand"),
+  toast: document.getElementById("toast"),
+  err: document.getElementById("err"),
+  errMsg: document.getElementById("errMsg"),
+  enter: document.getElementById("enterBtn"),
+  retry: document.getElementById("retryBtn"),
+  burst: document.getElementById("burstBtn"),
+  sound: document.getElementById("soundBtn"),
+  look: document.getElementById("lookBtn"),
+};
+
+// ---------------------------------------------------------------------------
+// renderer / scene
+// ---------------------------------------------------------------------------
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+const DPR = Math.min(window.devicePixelRatio || 1, 2);
+renderer.setPixelRatio(DPR);
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setClearColor(0x08090a, 1);
+document.getElementById("app").appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+camera.position.set(0, 0, 2.05);
+
+const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+// post: bloom + custom chroma (RGB split) + output
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(
+  new THREE.Vector2(window.innerWidth, window.innerHeight),
+  IS_MOBILE ? 0.7 : 0.95, // strength
+  0.6,                    // radius
+  0.0                     // threshold (dark bg → bloom everything bright)
+);
+composer.addPass(bloom);
+
+// custom chroma-split pass (the face3d.py _chroma_split, on the beat)
+const ChromaShader = {
+  uniforms: { tDiffuse: { value: null }, uAmount: { value: 0.0 } },
+  vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);} `,
+  fragmentShader: `
+    uniform sampler2D tDiffuse; uniform float uAmount; varying vec2 vUv;
+    void main(){
+      vec2 d = vec2(uAmount, 0.0);
+      float r = texture2D(tDiffuse, vUv + d).r;
+      float g = texture2D(tDiffuse, vUv).g;
+      float b = texture2D(tDiffuse, vUv - d).b;
+      gl_FragColor = vec4(r, g, b, 1.0);
+    }`,
+};
+const chroma = new ShaderPass(ChromaShader);
+composer.addPass(chroma);
+composer.addPass(new OutputPass());
+
+// ---------------------------------------------------------------------------
+// the point cloud — built once the face mesh topology is known
+// ---------------------------------------------------------------------------
+let points = null, geo = null, mat = null, videoTex = null;
+let plan = null;            // per-point {a, b, t, phase, sx, sy, sz}
+let positions = null, uvs = null;
+let N = 0;
+
+const state = {
+  burst: 0,                // dissolve envelope 0..1
+  audio: 0,                // smoothed bass 0..1
+  chroma: 0,               // chroma-split pulse
+  lastFace: null,          // last good landmark array (graceful when face lost)
+  t0: performance.now(),
+  autoBurstAt: 8000,
+};
+
+function buildCloud() {
+  // topology: 478 anchor landmarks + interpolated points along the face-mesh
+  // tesselation edges → a dense cloud that hugs the real face surface.
+  const tess = FaceLandmarker.FACE_LANDMARKS_TESSELATION; // [{start,end}, ...]
+  const samples = IS_MOBILE ? [0.5] : [0.34, 0.68];
+  const arr = [];
+  // anchors
+  for (let i = 0; i < 478; i++) arr.push({ a: i, b: i, t: 0 });
+  // edge fills
+  for (const c of tess) for (const t of samples) arr.push({ a: c.start, b: c.end, t });
+
+  N = arr.length;
+  plan = arr.map((p, i) => {
+    // stable per-point randomness for shimmer + scatter (seeded by index)
+    const r = (s) => { const x = Math.sin((i + 1) * 12.9898 + s * 78.233) * 43758.5453; return x - Math.floor(x); };
+    return {
+      a: p.a, b: p.b, t: p.t,
+      phase: r(1) * Math.PI * 2,
+      sx: (r(2) - 0.5) * 2, sy: (r(3) - 0.5) * 2, sz: (r(4) - 0.5) * 2,
+    };
+  });
+
+  positions = new Float32Array(N * 3);
+  uvs = new Float32Array(N * 2);
+  geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute("aUv", new THREE.BufferAttribute(uvs, 2));
+
+  videoTex = new THREE.VideoTexture(els.cam);
+  videoTex.colorSpace = THREE.SRGBColorSpace;
+  videoTex.flipY = false;
+  videoTex.minFilter = THREE.LinearFilter;
+  videoTex.magFilter = THREE.LinearFilter;
+
+  mat = new THREE.ShaderMaterial({
+    uniforms: {
+      uMap: { value: videoTex },
+      uSize: { value: LOOKS[0].size },
+      uDpr: { value: DPR },
+      uAudio: { value: 0 },
+      uLime: { value: LIME.clone() },
+      uPurple: { value: PURPLE.clone() },
+      uLimeMix: { value: LOOKS[0].limeMix },
+      uUseVideo: { value: LOOKS[0].useVideo },
+    },
+    vertexShader: `
+      attribute vec2 aUv;
+      varying vec2 vUv;
+      uniform float uSize, uDpr, uAudio;
+      void main(){
+        vUv = aUv;
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        gl_Position = projectionMatrix * mv;
+        gl_PointSize = uSize * uDpr * (1.0 + uAudio * 0.9) * (1.0 / max(0.15, -mv.z));
+      }`,
+    fragmentShader: `
+      precision highp float;
+      uniform sampler2D uMap;
+      uniform vec3 uLime, uPurple;
+      uniform float uLimeMix, uUseVideo, uAudio;
+      varying vec2 vUv;
+      void main(){
+        // round, soft-falloff dot → additive glow
+        float d = length(gl_PointCoord - 0.5);
+        if (d > 0.5) discard;
+        float fall = smoothstep(0.5, 0.0, d);
+
+        vec3 vid = texture2D(uMap, vUv).rgb;
+        float lum = dot(vid, vec3(0.299, 0.587, 0.114));
+
+        // grade toward GEECKET palette (face3d.py tint())
+        vec3 base = mix(uLime, vid, uUseVideo * 0.4);
+        vec3 col = mix(vid * 0.4 + uLime * 0.6, base, 1.0 - uLimeMix);
+        col = mix(col, uPurple, smoothstep(0.72, 1.0, lum));   // hot → purple
+        col *= (0.55 + 0.95 * lum + 0.35 * uAudio);
+
+        gl_FragColor = vec4(col * fall, fall);
+      }`,
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    depthTest: false,
+    depthWrite: false,
+  });
+
+  points = new THREE.Points(geo, mat);
+  scene.add(points);
+}
+
+// map a MediaPipe landmark to GEECKET world space (mirrored, aspect-correct)
+let camAspect = 1;
+function lmToWorld(lm, out) {
+  out.x = (0.5 - lm.x) * 1.9 * camAspect;  // mirror X for selfie feel
+  out.y = (0.5 - lm.y) * 1.9;
+  out.z = -lm.z * 1.9;
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// face tracking
+// ---------------------------------------------------------------------------
+let landmarker = null;
+async function initFace() {
+  const fileset = await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm"
+  );
+  landmarker = await FaceLandmarker.createFromOptions(fileset, {
+    baseOptions: {
+      modelAssetPath:
+        "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+      delegate: "GPU",
+    },
+    outputFaceBlendshapes: true,
+    runningMode: "VIDEO",
+    numFaces: 1,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// audio reactivity (optional mic) — bass swells the cloud, onset = burst+chroma
+// ---------------------------------------------------------------------------
+let analyser = null, freqData = null, prevBass = 0;
+async function toggleSound() {
+  if (analyser) { // turn off
+    analyser = null;
+    els.sound.classList.remove("on");
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const ac = new (window.AudioContext || window.webkitAudioContext)();
+    const src = ac.createMediaStreamSource(stream);
+    analyser = ac.createAnalyser();
+    analyser.fftSize = 1024;
+    src.connect(analyser);
+    freqData = new Uint8Array(analyser.frequencyBinCount);
+    els.sound.classList.add("on");
+    showToast("listening — play your beat");
+  } catch (e) {
+    showToast("mic blocked");
+  }
+}
+
+function readAudio() {
+  if (!analyser) { state.audio *= 0.92; return; }
+  analyser.getByteFrequencyData(freqData);
+  // low band ~ first 8 bins
+  let b = 0; for (let i = 0; i < 8; i++) b += freqData[i];
+  b = b / (8 * 255);
+  const onset = Math.max(0, b - prevBass);
+  prevBass = b;
+  state.audio += (b - state.audio) * 0.3;
+  if (onset > 0.12) { triggerBurst(0.55); state.chroma = Math.min(1, state.chroma + onset * 2.5); }
+}
+
+// ---------------------------------------------------------------------------
+// interactions
+// ---------------------------------------------------------------------------
+function triggerBurst(amount = 1) { state.burst = Math.min(1, state.burst + amount); }
+function cycleLook() {
+  lookIdx = (lookIdx + 1) % LOOKS.length;
+  const L = LOOKS[lookIdx];
+  mat.uniforms.uSize.value = L.size;
+  mat.uniforms.uLimeMix.value = L.limeMix;
+  mat.uniforms.uUseVideo.value = L.useVideo;
+  bloom.strength = (IS_MOBILE ? 0.75 : 1.0) * (L.bloom / 0.95);
+  showToast(L.name);
+}
+
+let lastTap = 0;
+renderer.domElement.addEventListener("pointerdown", () => {
+  const now = performance.now();
+  if (now - lastTap < 300) { state.chroma = 1; } // double-tap → glitch
+  else { triggerBurst(1); }
+  lastTap = now;
+});
+els.burst.addEventListener("click", (e) => { e.stopPropagation(); triggerBurst(1); });
+els.sound.addEventListener("click", (e) => { e.stopPropagation(); toggleSound(); });
+els.look.addEventListener("click", (e) => { e.stopPropagation(); cycleLook(); });
+
+function showToast(msg) {
+  els.toast.textContent = msg;
+  els.toast.classList.add("show");
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => els.toast.classList.remove("show"), 1800);
+}
+
+// ---------------------------------------------------------------------------
+// render loop
+// ---------------------------------------------------------------------------
+const _v = new THREE.Vector3();
+const A = new THREE.Vector3(), B = new THREE.Vector3();
+
+function frame() {
+  requestAnimationFrame(frame);
+  const now = performance.now();
+  const time = (now - state.t0) / 1000;
+
+  // face inference
+  if (landmarker && els.cam.readyState >= 2) {
+    const res = landmarker.detectForVideo(els.cam, now);
+    if (res.faceLandmarks && res.faceLandmarks.length) state.lastFace = res.faceLandmarks[0];
+  }
+
+  readAudio();
+
+  // auto-burst occasionally so an idle face still "performs"
+  if (!analyser && now - state.t0 > state.autoBurstAt) {
+    triggerBurst(0.8); state.autoBurstAt = (now - state.t0) + 7000 + Math.random() * 4000;
+  }
+
+  // decay envelopes
+  state.burst *= 0.94;
+  state.chroma *= 0.85;
+
+  const face = state.lastFace;
+  if (face && positions) {
+    const burst = state.burst;
+    const swell = 1 + state.audio * 0.18;
+    for (let i = 0; i < N; i++) {
+      const p = plan[i];
+      lmToWorld(face[p.a], A);
+      if (p.b !== p.a) { lmToWorld(face[p.b], B); A.lerp(B, p.t); }
+
+      // shimmer (face3d.py living-shimmer): per-point breathing depth
+      const sh = Math.sin(time * 2.0 + p.phase) * 0.012;
+
+      let x = A.x * swell, y = A.y * swell, z = A.z * swell + sh;
+
+      // dissolve: outward scatter + drift, point identity preserved
+      if (burst > 0.001) {
+        const e = burst * burst;
+        const len = Math.hypot(A.x, A.y) + 1e-4;
+        x += (A.x / len) * e * 0.5 + p.sx * e * 0.55;
+        y += (A.y / len) * e * 0.5 + p.sy * e * 0.55 + e * 0.12; // slight rise
+        z += p.sz * e * 0.55;
+      }
+
+      const o = i * 3;
+      positions[o] = x; positions[o + 1] = y; positions[o + 2] = z;
+      const u = i * 2;
+      // uv for video color sampling (unmirrored, flipY handled on texture)
+      const la = face[p.a], lb = (p.b !== p.a) ? face[p.b] : la;
+      uvs[u] = la.x + (lb.x - la.x) * p.t;
+      uvs[u + 1] = la.y + (lb.y - la.y) * p.t;
+    }
+    geo.attributes.position.needsUpdate = true;
+    geo.attributes.aUv.needsUpdate = true;
+
+    // slow auto-yaw so the cloud has parallax life
+    points.rotation.y = Math.sin(time * 0.25) * 0.18;
+  }
+
+  if (mat) mat.uniforms.uAudio.value = state.audio;
+  chroma.uniforms.uAmount.value = state.chroma * 0.006;
+
+  composer.render();
+}
+
+// ---------------------------------------------------------------------------
+// boot sequence
+// ---------------------------------------------------------------------------
+async function start() {
+  els.intro.style.opacity = "0";
+  setTimeout(() => (els.intro.style.display = "none"), 600);
+  els.load.classList.add("show");
+
+  // 1. camera (must be inside the user gesture for iOS)
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
+    });
+  } catch (e) {
+    return showError(
+      e.name === "NotAllowedError" ? "Camera blocked" : "No camera",
+      e.name === "NotAllowedError"
+        ? "GEECKET needs the camera to draw you. Allow it in your browser and hit retry — nothing is uploaded."
+        : "Couldn't reach a camera on this device. Try another device or browser."
+    );
+  }
+
+  els.cam.srcObject = stream;
+  await els.cam.play().catch(() => {});
+  await new Promise((r) => {
+    if (els.cam.videoWidth) return r();
+    els.cam.onloadedmetadata = () => r();
+  });
+  camAspect = (els.cam.videoWidth / els.cam.videoHeight) || 1;
+
+  // 2. face model + cloud
+  try {
+    await initFace();
+  } catch (e) {
+    return showError("Couldn't load the model", "The face engine failed to download. Check your connection and retry.");
+  }
+  buildCloud();
+
+  // 3. go live
+  els.load.classList.remove("show");
+  els.hud.classList.add("show");
+  els.brand.classList.add("show");
+  showToast("tap = burst · double-tap = glitch · ◉ sound");
+  frame();
+}
+
+function showError(title, msg) {
+  els.load.classList.remove("show");
+  document.getElementById("errTitle").textContent = title;
+  els.errMsg.textContent = msg;
+  els.err.classList.add("show");
+}
+
+els.enter.addEventListener("click", start);
+els.retry.addEventListener("click", () => { els.err.classList.remove("show"); start(); });
+
+window.addEventListener("resize", () => {
+  const w = window.innerWidth, h = window.innerHeight;
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+  renderer.setSize(w, h); composer.setSize(w, h);
+});
+</script>
+</body>
+</html>
