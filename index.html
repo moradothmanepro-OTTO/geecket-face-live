@@ -224,7 +224,13 @@ function initGL() {
   DPR = Math.min(window.devicePixelRatio || 1, 2);
   IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
-  renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+  // acquire a WebGL2 context permissively — allow software fallback so Brave /
+  // HW-accel-off / no-discrete-GPU setups can still get a context.
+  const glCanvas = document.createElement("canvas");
+  const glOpts = { antialias: true, alpha: false, powerPreference: "default", failIfMajorPerformanceCaveat: false };
+  const gl = glCanvas.getContext("webgl2", glOpts);
+  if (!gl) throw new Error("Error creating WebGL context (WebGL2 unavailable)");
+  renderer = new THREE.WebGLRenderer({ canvas: glCanvas, context: gl, antialias: true });
   renderer.setPixelRatio(DPR);
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setClearColor(0x08090a, 1);
@@ -485,7 +491,7 @@ async function start() {
   catch (e) {
     booting = false;
     return showError("WebGL unavailable",
-      "Your browser blocked WebGL. In Brave, lower Shields / disable fingerprint-blocking for this site, or use Safari. (" + (e && e.message || e) + ")");
+      "Brave is blocking WebGL. Quick fix: open this link in Safari. To fix Brave: brave://settings/system → turn ON 'Use hardware acceleration', relaunch; and Shield (lion) → set Fingerprint blocking to 'Allow' for this site, then RETRY. (" + (e && e.message || e) + ")");
   }
 
   // 3. face model
