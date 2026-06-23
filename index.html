@@ -95,7 +95,7 @@
     <span class="pill">Your video never leaves this device</span> — it's drawn, not uploaded.</div>
 </div>
 
-<div id="load"><div class="ring"></div><div class="lbl">summoning the cloud</div></div>
+<div id="load"><div class="ring"></div><div class="lbl" id="loadLbl">summoning the cloud</div></div>
 
 <div id="toast"></div>
 
@@ -185,6 +185,8 @@ window.__geecketReady = true;
 
 function showError(title, msg) { els.load.classList.remove("show"); $("errTitle").textContent = title; els.errMsg.textContent = msg; els.err.classList.add("show"); }
 function showToast(msg) { els.toast.textContent = msg; els.toast.classList.add("show"); clearTimeout(showToast._t); showToast._t = setTimeout(() => els.toast.classList.remove("show"), 1900); }
+function setStatus(s) { const l = $("loadLbl"); if (l) l.textContent = s; }
+function withTimeout(p, ms, label) { return Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error("timed out: " + label)), ms))]); }
 
 // ---- libs + shared state ----
 let THREE, EffectComposer, RenderPass, UnrealBloomPass, ShaderPass, OutputPass, FaceLandmarker, FilesetResolver;
@@ -429,14 +431,15 @@ function computePoints(time) {
 
 // ---------------------------------------------------------------------------
 async function initFace() {
-  const mp = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/vision_bundle.mjs");
+  // SELF-HOSTED: everything loads from this same origin (the page already
+  // reached the user), so no external CDN/region block can break face tracking.
+  const f = (n) => new URL("mp/" + n, location.href).href;
+  const dir = new URL("mp", location.href).href;
+  const mp = await import(f("vision_bundle.js"));
   FilesetResolver = mp.FilesetResolver; FaceLandmarker = mp.FaceLandmarker;
-  const fileset = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm");
+  const fileset = await FilesetResolver.forVisionTasks(dir);
   landmarker = await FaceLandmarker.createFromOptions(fileset, {
-    baseOptions: {
-      modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
-      delegate: MODE === "gpu" ? "GPU" : "CPU",   // CPU delegate when WebGL is gone
-    },
+    baseOptions: { modelAssetPath: f("face_landmarker.task"), delegate: MODE === "gpu" ? "GPU" : "CPU" },
     outputFaceBlendshapes: false, runningMode: "VIDEO", numFaces: 1,
   });
 }
@@ -538,6 +541,7 @@ async function start() {
   els.load.classList.add("show");
 
   // 1. camera first (keeps iOS user-gesture intact)
+  setStatus("requesting camera…");
   let stream;
   try {
     stream = await acquireCamera();
@@ -546,28 +550,35 @@ async function start() {
     const [t, m] = camMessage(e);
     return showError(t, m);
   }
+  setStatus("waking video…");
   els.cam.srcObject = stream;
   await els.cam.play().catch(() => {});
-  await new Promise((r) => { if (els.cam.videoWidth) return r(); els.cam.onloadedmetadata = () => r(); });
+  await withTimeout(new Promise((r) => { if (els.cam.videoWidth) return r(); els.cam.onloadedmetadata = () => r(); }), 8000, "video").catch(() => {});
   camAspect = (els.cam.videoWidth / els.cam.videoHeight) || 1;
 
   // 2. choose render path by WebGL2 availability — this is the all-users fix
   MODE = hasWebGL2() ? "gpu" : "cpu";
 
   if (MODE === "gpu") {
-    try { await loadThree(); initGPU(); }
-    catch (e) { MODE = "cpu"; }       // any GPU hiccup → fall back, never error out
+    setStatus("loading 3D engine…");
+    try { await withTimeout(loadThree(), 15000, "three"); initGPU(); }
+    catch (e) { MODE = "cpu"; }       // any GPU hiccup → fall back to CPU (needs no three)
   }
   if (MODE === "cpu") {
+    setStatus("starting lite renderer…");
     try { initCPU(); }
     catch (e) { booting = false; return showError("Can't draw here", "This browser blocked both WebGL and 2D canvas. Try Safari or Chrome. (" + (e && e.message || e) + ")"); }
   }
 
-  // 3. face model (delegate matches MODE)
-  try { await initFace(); }
+  // 3. face engine (self-hosted, same origin)
+  setStatus("loading face engine…");
+  try { await withTimeout(initFace(), 30000, "face engine"); }
   catch (e) {
     booting = false;
-    return showError("Face engine blocked", "Couldn't download the face model (CDN blocked or offline). In Brave, lower Shields for this site and RETRY. (" + (e && e.message || e) + ")");
+    const m = (e && e.message || e) + "";
+    return showError("Face engine failed",
+      (m.indexOf("timed out") >= 0 ? "The face engine took too long to load on this connection. " : "Couldn't start the face engine. ") +
+      "Try a stronger Wi-Fi/data connection and RETRY. (" + m + ")");
   }
 
   // 4. build + go live
