@@ -35,8 +35,7 @@
   .enter{margin-top:8px;border:1px solid rgba(198,255,58,.6);background:rgba(198,255,58,.06);
     color:var(--lime);font-weight:700;letter-spacing:.28em;text-indent:.28em;
     font-size:14px;padding:16px 34px;border-radius:999px;cursor:pointer;
-    transition:transform .15s ease, background .2s ease, box-shadow .3s ease;
-    box-shadow:0 0 0 rgba(198,255,58,0)}
+    transition:transform .15s ease, background .2s ease, box-shadow .3s ease}
   .enter:hover{background:rgba(198,255,58,.14);box-shadow:0 0 30px rgba(198,255,58,.25)}
   .enter:active{transform:scale(.96)}
   .note{font-size:11px;letter-spacing:.12em;color:#5d6065;max-width:300px;line-height:1.6}
@@ -64,6 +63,7 @@
   #brand.show{display:flex}
   #brand .w{font-weight:800;letter-spacing:.36em;text-indent:.36em;font-size:13px;color:#fff;opacity:.85}
   #brand .w b{color:var(--lime)}
+  #brand .tag{font-size:9px;letter-spacing:.3em;color:#6b6f73;margin-left:10px;align-self:center}
 
   #toast{position:fixed;left:50%;top:52%;transform:translate(-50%,-50%);z-index:14;
     font-size:12px;letter-spacing:.16em;color:#aeb2b5;background:rgba(10,11,12,.55);
@@ -85,7 +85,7 @@
 <div id="fx"></div>
 <div id="vig"></div>
 
-<div id="brand"><span class="w">GEE<b>CKET</b></span></div>
+<div id="brand"><span class="w">GEE<b>CKET</b></span><span class="tag" id="modeTag"></span></div>
 
 <div id="intro">
   <div class="mark">GEE<b>CKET</b></div>
@@ -111,34 +111,29 @@
   <button class="enter" id="retryBtn">RETRY</button>
 </div>
 
-<!-- CLASSIC guard: runs even if the ES module / CDN libs fail. Surfaces the
-     real reason on-screen instead of a silently dead button. -->
+<!-- CLASSIC guard: runs even if the ES module / CDN libs fail. -->
 <script>
 (function(){
   function showErr(title, msg){
     try{
-      var e=document.getElementById('err');
       document.getElementById('errTitle').textContent=title||"Couldn't start";
       document.getElementById('errMsg').textContent=msg||'';
       var l=document.getElementById('load'); if(l) l.classList.remove('show');
       var i=document.getElementById('intro'); if(i){ i.style.opacity=''; i.style.display=''; }
-      e.classList.add('show');
+      document.getElementById('err').classList.add('show');
     }catch(_){}
   }
   window.__geecketErr = showErr;
-  // catch uncaught errors AND failed resource loads (capture phase)
   window.addEventListener('error', function(ev){
-    if(window.__geecketReady) return; // module already running — let its own handlers deal
-    var src = (ev.target && (ev.target.src||ev.target.href)) || ev.filename || '';
-    var m = ev.message || (src ? ('failed to load '+src) : 'a script failed to load');
-    showErr('Scripts blocked', m + '  ·  In Brave, click the Shield (lion) → turn Shields DOWN for this page, then reload. Safari or Chrome also work.');
+    if(window.__geecketReady) return;
+    var src=(ev.target&&(ev.target.src||ev.target.href))||ev.filename||'';
+    var m=ev.message||(src?('failed to load '+src):'a script failed to load');
+    showErr('Scripts blocked', m+'  ·  In Brave, click the Shield (lion) → Shields DOWN for this page, then reload. Safari or Chrome also work.');
   }, true);
-  // watchdog: the inline module flips __geecketReady within a few ms; if not, it never ran.
   window.addEventListener('load', function(){
     setTimeout(function(){
       if(!window.__geecketReady){
-        showErr('Scripts blocked',
-          'The page script did not run (blocked by the browser or an extension). In Brave, click the Shield icon → turn Shields DOWN for this site, then reload. Safari and Chrome work too.');
+        showErr('Scripts blocked','The page script did not run (blocked by the browser or an extension). In Brave, Shield icon → Shields DOWN for this site, then reload. Safari and Chrome work too.');
       }
     }, 4000);
   });
@@ -156,24 +151,26 @@
 
 <script type="module">
 // =====================================================================
-//  GEECKET · LIVE FACE — robust boot.
-//  The button is wired FIRST. All CDN libraries (three.js + MediaPipe)
-//  are DYNAMICALLY imported on ENTER, so a blocked/slow CDN can never
-//  leave a dead button — it shows an on-screen reason instead.
+//  GEECKET · LIVE FACE — works for ALL users.
+//  - Button wired first; CDN libs loaded dynamically on ENTER.
+//  - WebGL2 available  → GPU path (three.js + bloom), MediaPipe GPU.
+//  - WebGL2 blocked    → CPU path (Canvas2D additive glow), MediaPipe CPU.
+//  Face tracking is WASM and runs in both paths, so nobody hits a wall.
 // =====================================================================
 
 const LIME_HEX = 0xc6ff3a, PURPLE_HEX = 0xaa3cc8;
+const LIME_CSS = "#c6ff3a", PURPLE_CSS = "#aa3cc8";
 const LOOKS = [
-  { name: "POINTCLOUD", size: 2.4, bloom: 0.95, limeMix: 0.62, useVideo: 1.0 },
-  { name: "WIREFRAME",  size: 1.7, bloom: 0.80, limeMix: 0.95, useVideo: 0.15 },
-  { name: "INFRARED",   size: 2.6, bloom: 1.15, limeMix: 0.0,  useVideo: 1.0 },
+  { name: "POINTCLOUD", size: 2.4, bloom: 0.95, limeMix: 0.62, useVideo: 1.0, limeOnly: false },
+  { name: "WIREFRAME",  size: 1.7, bloom: 0.80, limeMix: 0.95, useVideo: 0.15, limeOnly: true },
+  { name: "INFRARED",   size: 2.6, bloom: 1.15, limeMix: 0.0,  useVideo: 1.0, limeOnly: false },
 ];
 let lookIdx = 0;
 
 const $ = (id) => document.getElementById(id);
 const els = {
   cam: $("cam"), intro: $("intro"), load: $("load"), hud: $("hud"), brand: $("brand"),
-  toast: $("toast"), err: $("err"), errMsg: $("errMsg"),
+  toast: $("toast"), err: $("err"), errMsg: $("errMsg"), modeTag: $("modeTag"),
   enter: $("enterBtn"), retry: $("retryBtn"), burst: $("burstBtn"), sound: $("soundBtn"), look: $("lookBtn"),
 };
 
@@ -183,32 +180,36 @@ els.retry.addEventListener("click", () => { els.err.classList.remove("show"); st
 els.burst.addEventListener("click", (e) => { e.stopPropagation(); triggerBurst(1); });
 els.sound.addEventListener("click", (e) => { e.stopPropagation(); toggleSound(); });
 els.look.addEventListener("click", (e) => { e.stopPropagation(); cycleLook(); });
-window.__geecketReady = true;  // tell the watchdog the module is alive
+window.addEventListener("pointerdown", onTap);
+window.__geecketReady = true;
 
-function showError(title, msg) {
-  els.load.classList.remove("show");
-  $("errTitle").textContent = title;
-  els.errMsg.textContent = msg;
-  els.err.classList.add("show");
-}
-function showToast(msg) {
-  els.toast.textContent = msg;
-  els.toast.classList.add("show");
-  clearTimeout(showToast._t);
-  showToast._t = setTimeout(() => els.toast.classList.remove("show"), 1900);
-}
+function showError(title, msg) { els.load.classList.remove("show"); $("errTitle").textContent = title; els.errMsg.textContent = msg; els.err.classList.add("show"); }
+function showToast(msg) { els.toast.textContent = msg; els.toast.classList.add("show"); clearTimeout(showToast._t); showToast._t = setTimeout(() => els.toast.classList.remove("show"), 1900); }
 
-// ---- lazily-loaded libs + GL state ----
+// ---- libs + shared state ----
 let THREE, EffectComposer, RenderPass, UnrealBloomPass, ShaderPass, OutputPass, FaceLandmarker, FilesetResolver;
-let renderer, scene, camera, composer, bloom, chroma, DPR = 1, IS_MOBILE = false;
-let points = null, geo = null, mat = null, videoTex = null;
-let plan = null, positions = null, uvs = null, N = 0;
+let MODE = "gpu";                 // "gpu" | "cpu"
 let landmarker = null, analyser = null, freqData = null, prevBass = 0, camAspect = 1;
+let plan = null, positions = null, uvs = null, N = 0;
 let booting = false, looping = false;
-
 const state = { burst: 0, audio: 0, chroma: 0, lastFace: null, t0: 0, autoBurstAt: 8000 };
 
-async function loadLibs() {
+// GPU state
+let renderer, scene, camera, composer, bloom, chroma, mat, geo, points, videoTex, DPR = 1;
+// CPU state
+let c2, ctx2d, glowLime, glowPurple, glowBlue, vidCanvas, vidCtx, DPR2 = 1;
+
+const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+// ---------------------------------------------------------------------------
+function hasWebGL2() {
+  try {
+    const c = document.createElement("canvas");
+    return !!c.getContext("webgl2", { failIfMajorPerformanceCaveat: false });
+  } catch (_) { return false; }
+}
+
+async function loadThree() {
   if (THREE) return;
   THREE = await import("three");
   const pp = "three/addons/postprocessing/";
@@ -220,16 +221,13 @@ async function loadLibs() {
 }
 
 // ---------------------------------------------------------------------------
-function initGL() {
+//  GPU renderer (three.js)
+// ---------------------------------------------------------------------------
+function initGPU() {
   DPR = Math.min(window.devicePixelRatio || 1, 2);
-  IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-
-  // acquire a WebGL2 context permissively — allow software fallback so Brave /
-  // HW-accel-off / no-discrete-GPU setups can still get a context.
   const glCanvas = document.createElement("canvas");
-  const glOpts = { antialias: true, alpha: false, powerPreference: "default", failIfMajorPerformanceCaveat: false };
-  const gl = glCanvas.getContext("webgl2", glOpts);
-  if (!gl) throw new Error("Error creating WebGL context (WebGL2 unavailable)");
+  const gl = glCanvas.getContext("webgl2", { antialias: true, alpha: false, powerPreference: "default", failIfMajorPerformanceCaveat: false });
+  if (!gl) throw new Error("webgl2-null");
   renderer = new THREE.WebGLRenderer({ canvas: glCanvas, context: gl, antialias: true });
   renderer.setPixelRatio(DPR);
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -242,67 +240,27 @@ function initGL() {
 
   composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
-  bloom = new UnrealBloomPass(
-    new THREE.Vector2(window.innerWidth, window.innerHeight),
-    IS_MOBILE ? 0.7 : 0.95, 0.6, 0.0);
+  bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), IS_MOBILE ? 0.7 : 0.95, 0.6, 0.0);
   composer.addPass(bloom);
-
   const ChromaShader = {
     uniforms: { tDiffuse: { value: null }, uAmount: { value: 0.0 } },
     vertexShader: "varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);} ",
     fragmentShader: "uniform sampler2D tDiffuse; uniform float uAmount; varying vec2 vUv;" +
-      "void main(){ vec2 d=vec2(uAmount,0.0);" +
-      "float r=texture2D(tDiffuse,vUv+d).r; float g=texture2D(tDiffuse,vUv).g; float b=texture2D(tDiffuse,vUv-d).b;" +
-      "gl_FragColor=vec4(r,g,b,1.0);} ",
+      "void main(){ vec2 d=vec2(uAmount,0.0); float r=texture2D(tDiffuse,vUv+d).r; float g=texture2D(tDiffuse,vUv).g; float b=texture2D(tDiffuse,vUv-d).b; gl_FragColor=vec4(r,g,b,1.0);} ",
   };
   chroma = new ShaderPass(ChromaShader);
   composer.addPass(chroma);
   composer.addPass(new OutputPass());
-
-  renderer.domElement.addEventListener("pointerdown", () => {
-    const now = performance.now();
-    if (now - (renderer.domElement._lastTap || 0) < 300) state.chroma = 1; // double-tap glitch
-    else triggerBurst(1);
-    renderer.domElement._lastTap = now;
-  });
   window.addEventListener("resize", onResize);
 }
 
-function onResize() {
-  if (!renderer) return;
-  const w = window.innerWidth, h = window.innerHeight;
-  camera.aspect = w / h; camera.updateProjectionMatrix();
-  renderer.setSize(w, h); composer.setSize(w, h);
-}
-
-// ---------------------------------------------------------------------------
-function buildCloud() {
-  if (points) return;
-  const tess = FaceLandmarker.FACE_LANDMARKS_TESSELATION;   // [{start,end},...]
-  const samples = IS_MOBILE ? [0.5] : [0.34, 0.68];
-  const arr = [];
-  for (let i = 0; i < 478; i++) arr.push({ a: i, b: i, t: 0 });
-  for (const c of tess) for (const t of samples) arr.push({ a: c.start, b: c.end, t });
-
-  N = arr.length;
-  plan = arr.map((p, i) => {
-    const r = (s) => { const x = Math.sin((i + 1) * 12.9898 + s * 78.233) * 43758.5453; return x - Math.floor(x); };
-    return { a: p.a, b: p.b, t: p.t, phase: r(1) * Math.PI * 2,
-             sx: (r(2) - 0.5) * 2, sy: (r(3) - 0.5) * 2, sz: (r(4) - 0.5) * 2 };
-  });
-
-  positions = new Float32Array(N * 3);
-  uvs = new Float32Array(N * 2);
+function buildGPUCloud() {
   geo = new THREE.BufferGeometry();
   geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
   geo.setAttribute("aUv", new THREE.BufferAttribute(uvs, 2));
-
   videoTex = new THREE.VideoTexture(els.cam);
-  videoTex.colorSpace = THREE.SRGBColorSpace;
-  videoTex.flipY = false;
-  videoTex.minFilter = THREE.LinearFilter;
-  videoTex.magFilter = THREE.LinearFilter;
-
+  videoTex.colorSpace = THREE.SRGBColorSpace; videoTex.flipY = false;
+  videoTex.minFilter = THREE.LinearFilter; videoTex.magFilter = THREE.LinearFilter;
   const L = LOOKS[lookIdx];
   mat = new THREE.ShaderMaterial({
     uniforms: {
@@ -310,63 +268,180 @@ function buildCloud() {
       uLime: { value: new THREE.Color(LIME_HEX) }, uPurple: { value: new THREE.Color(PURPLE_HEX) },
       uLimeMix: { value: L.limeMix }, uUseVideo: { value: L.useVideo },
     },
-    vertexShader: `
-      attribute vec2 aUv; varying vec2 vUv;
-      uniform float uSize, uDpr, uAudio;
-      void main(){
-        vUv = aUv;
-        vec4 mv = modelViewMatrix * vec4(position, 1.0);
-        gl_Position = projectionMatrix * mv;
-        gl_PointSize = uSize * uDpr * (1.0 + uAudio * 0.9) * (1.0 / max(0.15, -mv.z));
-      }`,
-    fragmentShader: `
-      precision highp float;
-      uniform sampler2D uMap; uniform vec3 uLime, uPurple;
-      uniform float uLimeMix, uUseVideo, uAudio; varying vec2 vUv;
-      void main(){
-        float d = length(gl_PointCoord - 0.5);
-        if (d > 0.5) discard;
-        float fall = smoothstep(0.5, 0.0, d);
-        vec3 vid = texture2D(uMap, vUv).rgb;
-        float lum = dot(vid, vec3(0.299, 0.587, 0.114));
-        vec3 base = mix(uLime, vid, uUseVideo * 0.4);
-        vec3 col = mix(vid * 0.4 + uLime * 0.6, base, 1.0 - uLimeMix);
-        col = mix(col, uPurple, smoothstep(0.72, 1.0, lum));
-        col *= (0.55 + 0.95 * lum + 0.35 * uAudio);
-        gl_FragColor = vec4(col * fall, fall);
-      }`,
+    vertexShader: `attribute vec2 aUv; varying vec2 vUv; uniform float uSize, uDpr, uAudio;
+      void main(){ vUv=aUv; vec4 mv=modelViewMatrix*vec4(position,1.0); gl_Position=projectionMatrix*mv;
+        gl_PointSize=uSize*uDpr*(1.0+uAudio*0.9)*(1.0/max(0.15,-mv.z)); }`,
+    fragmentShader: `precision highp float; uniform sampler2D uMap; uniform vec3 uLime,uPurple;
+      uniform float uLimeMix,uUseVideo,uAudio; varying vec2 vUv;
+      void main(){ float d=length(gl_PointCoord-0.5); if(d>0.5) discard; float fall=smoothstep(0.5,0.0,d);
+        vec3 vid=texture2D(uMap,vUv).rgb; float lum=dot(vid,vec3(0.299,0.587,0.114));
+        vec3 base=mix(uLime,vid,uUseVideo*0.4); vec3 col=mix(vid*0.4+uLime*0.6,base,1.0-uLimeMix);
+        col=mix(col,uPurple,smoothstep(0.72,1.0,lum)); col*=(0.55+0.95*lum+0.35*uAudio);
+        gl_FragColor=vec4(col*fall,fall); }`,
     transparent: true, blending: THREE.AdditiveBlending, depthTest: false, depthWrite: false,
   });
-
   points = new THREE.Points(geo, mat);
   scene.add(points);
 }
 
+function renderGPU(time) {
+  geo.attributes.position.needsUpdate = true;
+  geo.attributes.aUv.needsUpdate = true;
+  points.rotation.y = Math.sin(time * 0.25) * 0.18;
+  mat.uniforms.uAudio.value = state.audio;
+  chroma.uniforms.uAmount.value = state.chroma * 0.006;
+  composer.render();
+}
+
+function onResize() {
+  if (MODE === "gpu" && renderer) {
+    const w = window.innerWidth, h = window.innerHeight;
+    camera.aspect = w / h; camera.updateProjectionMatrix();
+    renderer.setSize(w, h); composer.setSize(w, h);
+  } else if (MODE === "cpu" && c2) { sizeCPU(); }
+}
+
+// ---------------------------------------------------------------------------
+//  CPU renderer (Canvas2D) — universal fallback
+// ---------------------------------------------------------------------------
+function initCPU() {
+  DPR2 = Math.min(window.devicePixelRatio || 1, 2);
+  c2 = document.createElement("canvas");
+  c2.style.cssText = "display:block;width:100%;height:100%";
+  $("app").appendChild(c2);
+  ctx2d = c2.getContext("2d");
+  sizeCPU();
+  glowLime = makeGlow(LIME_CSS);
+  glowPurple = makeGlow(PURPLE_CSS);
+  glowBlue = makeGlow("#3ad0ff");
+  vidCanvas = document.createElement("canvas"); vidCanvas.width = vidCanvas.height = 120;
+  vidCtx = vidCanvas.getContext("2d", { willReadFrequently: true });
+  window.addEventListener("resize", onResize);
+}
+function sizeCPU() {
+  c2.width = Math.floor(window.innerWidth * DPR2);
+  c2.height = Math.floor(window.innerHeight * DPR2);
+}
+function makeGlow(css) {
+  const s = document.createElement("canvas"); s.width = s.height = 32;
+  const g = s.getContext("2d");
+  const grd = g.createRadialGradient(16, 16, 0, 16, 16, 16);
+  const rgb = hexToRgb(css);
+  grd.addColorStop(0, `rgba(${rgb},1)`);
+  grd.addColorStop(0.35, `rgba(${rgb},0.55)`);
+  grd.addColorStop(1, `rgba(${rgb},0)`);
+  g.fillStyle = grd; g.fillRect(0, 0, 32, 32);
+  return s;
+}
+function hexToRgb(h) { const n = parseInt(h.slice(1), 16); return `${(n >> 16) & 255},${(n >> 8) & 255},${n & 255}`; }
+
+function renderCPU(time) {
+  const W = c2.width, H = c2.height;
+  // motion-trail decay (cheap "alive" feel + hides low fps)
+  ctx2d.globalCompositeOperation = "source-over";
+  ctx2d.fillStyle = "rgba(8,9,10,0.38)";
+  ctx2d.fillRect(0, 0, W, H);
+  if (!state.lastFace) return;
+  ctx2d.globalCompositeOperation = "lighter";
+
+  let data = null;
+  try { vidCtx.drawImage(els.cam, 0, 0, 120, 120); data = vidCtx.getImageData(0, 0, 120, 120).data; } catch (_) {}
+
+  const L = LOOKS[lookIdx];
+  const scale = Math.min(W, H) * 0.42;
+  const yaw = Math.sin(time * 0.25) * 0.18, cy = Math.cos(yaw), sy = Math.sin(yaw);
+  const sizeMul = L.size * 1.5 * DPR2 * (1 + state.audio * 0.9);
+
+  for (let i = 0; i < N; i++) {
+    const o = i * 3;
+    let x = positions[o], y = positions[o + 1], z = positions[o + 2];
+    const rx = x * cy + z * sy; z = -x * sy + z * cy; x = rx;           // yaw
+    const persp = 1 / Math.max(0.2, 1 + z * 0.35);
+    const px = W / 2 + x * scale * persp;
+    const py = H / 2 - y * scale * persp;
+    if (px < -20 || px > W + 20 || py < -20 || py > H + 20) continue;
+
+    let lum = 0.6;
+    if (data) {
+      const u = i * 2;
+      const sxp = Math.min(119, Math.max(0, (uvs[u] * 120) | 0));
+      const syp = Math.min(119, Math.max(0, (uvs[u + 1] * 120) | 0));
+      const idx = (syp * 120 + sxp) * 4;
+      lum = (data[idx] * 0.299 + data[idx + 1] * 0.587 + data[idx + 2] * 0.114) / 255;
+    }
+    let sprite;
+    if (L.limeOnly) sprite = glowLime;
+    else if (L.name === "INFRARED") sprite = lum > 0.66 ? glowLime : (lum > 0.4 ? glowPurple : glowBlue);
+    else sprite = lum > 0.72 ? glowPurple : glowLime;
+
+    const sz = sizeMul * persp * (0.55 + lum);
+    ctx2d.globalAlpha = Math.min(1, 0.22 + lum * 0.85);
+    ctx2d.drawImage(sprite, px - sz, py - sz, sz * 2, sz * 2);
+  }
+  ctx2d.globalAlpha = 1;
+  ctx2d.globalCompositeOperation = "source-over";
+}
+
+// ---------------------------------------------------------------------------
+//  shared: build the point topology + per-frame positions
+// ---------------------------------------------------------------------------
+function buildPlan() {
+  const tess = FaceLandmarker.FACE_LANDMARKS_TESSELATION;
+  // CPU is heavier per point → fewer points there
+  const samples = (MODE === "gpu") ? (IS_MOBILE ? [0.5] : [0.34, 0.68]) : (IS_MOBILE ? [] : [0.5]);
+  const arr = [];
+  for (let i = 0; i < 478; i++) arr.push({ a: i, b: i, t: 0 });
+  for (const c of tess) for (const t of samples) arr.push({ a: c.start, b: c.end, t });
+  N = arr.length;
+  plan = arr.map((p, i) => {
+    const r = (s) => { const x = Math.sin((i + 1) * 12.9898 + s * 78.233) * 43758.5453; return x - Math.floor(x); };
+    return { a: p.a, b: p.b, t: p.t, phase: r(1) * Math.PI * 2, sx: (r(2) - 0.5) * 2, sy: (r(3) - 0.5) * 2, sz: (r(4) - 0.5) * 2 };
+  });
+  positions = new Float32Array(N * 3);
+  uvs = new Float32Array(N * 2);
+}
+
 const A = { x: 0, y: 0, z: 0 }, B = { x: 0, y: 0, z: 0 };
-function lmToWorld(lm, out) {
-  out.x = (0.5 - lm.x) * 1.9 * camAspect;   // mirror X (selfie)
-  out.y = (0.5 - lm.y) * 1.9;
-  out.z = -lm.z * 1.9;
-  return out;
+function lmToWorld(lm, out) { out.x = (0.5 - lm.x) * 1.9 * camAspect; out.y = (0.5 - lm.y) * 1.9; out.z = -lm.z * 1.9; return out; }
+
+function computePoints(time) {
+  const face = state.lastFace;
+  if (!face || !positions) return;
+  const burst = state.burst, swell = 1 + state.audio * 0.18;
+  for (let i = 0; i < N; i++) {
+    const p = plan[i];
+    lmToWorld(face[p.a], A);
+    if (p.b !== p.a) { lmToWorld(face[p.b], B); A.x += (B.x - A.x) * p.t; A.y += (B.y - A.y) * p.t; A.z += (B.z - A.z) * p.t; }
+    const sh = Math.sin(time * 2.0 + p.phase) * 0.012;
+    let x = A.x * swell, y = A.y * swell, z = A.z * swell + sh;
+    if (burst > 0.001) {
+      const e = burst * burst, len = Math.hypot(A.x, A.y) + 1e-4;
+      x += (A.x / len) * e * 0.5 + p.sx * e * 0.55;
+      y += (A.y / len) * e * 0.5 + p.sy * e * 0.55 + e * 0.12;
+      z += p.sz * e * 0.55;
+    }
+    const o = i * 3; positions[o] = x; positions[o + 1] = y; positions[o + 2] = z;
+    const la = face[p.a], lb = (p.b !== p.a) ? face[p.b] : la, u = i * 2;
+    uvs[u] = la.x + (lb.x - la.x) * p.t;
+    uvs[u + 1] = la.y + (lb.y - la.y) * p.t;
+  }
 }
 
 // ---------------------------------------------------------------------------
 async function initFace() {
   const mp = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/vision_bundle.mjs");
   FilesetResolver = mp.FilesetResolver; FaceLandmarker = mp.FaceLandmarker;
-  const fileset = await FilesetResolver.forVisionTasks(
-    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm");
+  const fileset = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm");
   landmarker = await FaceLandmarker.createFromOptions(fileset, {
     baseOptions: {
-      modelAssetPath:
-        "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
-      delegate: "GPU",
+      modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+      delegate: MODE === "gpu" ? "GPU" : "CPU",   // CPU delegate when WebGL is gone
     },
-    outputFaceBlendshapes: true, runningMode: "VIDEO", numFaces: 1,
+    outputFaceBlendshapes: false, runningMode: "VIDEO", numFaces: 1,
   });
 }
 
-// ---- optional mic reactivity ----
+// ---- mic reactivity ----
 async function toggleSound() {
   if (analyser) { analyser = null; els.sound.classList.remove("on"); return; }
   try {
@@ -381,74 +456,45 @@ async function toggleSound() {
 function readAudio() {
   if (!analyser) { state.audio *= 0.92; return; }
   analyser.getByteFrequencyData(freqData);
-  let b = 0; for (let i = 0; i < 8; i++) b += freqData[i];
-  b = b / (8 * 255);
+  let b = 0; for (let i = 0; i < 8; i++) b += freqData[i]; b = b / (8 * 255);
   const onset = Math.max(0, b - prevBass); prevBass = b;
   state.audio += (b - state.audio) * 0.3;
   if (onset > 0.12) { triggerBurst(0.55); state.chroma = Math.min(1, state.chroma + onset * 2.5); }
 }
 
 // ---- interactions ----
-function triggerBurst(amount = 1) { state.burst = Math.min(1, state.burst + amount); }
+function triggerBurst(a = 1) { state.burst = Math.min(1, state.burst + a); }
+function onTap() {
+  if (booting && !looping) return;
+  const now = performance.now();
+  if (now - (onTap._last || 0) < 300) state.chroma = 1; else triggerBurst(1);
+  onTap._last = now;
+}
 function cycleLook() {
-  if (!mat) return;
+  if (!looping) return;
   lookIdx = (lookIdx + 1) % LOOKS.length;
   const L = LOOKS[lookIdx];
-  mat.uniforms.uSize.value = L.size;
-  mat.uniforms.uLimeMix.value = L.limeMix;
-  mat.uniforms.uUseVideo.value = L.useVideo;
-  bloom.strength = (IS_MOBILE ? 0.75 : 1.0) * (L.bloom / 0.95);
+  if (MODE === "gpu" && mat) {
+    mat.uniforms.uSize.value = L.size; mat.uniforms.uLimeMix.value = L.limeMix; mat.uniforms.uUseVideo.value = L.useVideo;
+    bloom.strength = (IS_MOBILE ? 0.75 : 1.0) * (L.bloom / 0.95);
+  }
   showToast(L.name);
 }
 
 // ---------------------------------------------------------------------------
 function frame() {
   requestAnimationFrame(frame);
-  const now = performance.now();
-  const time = (now - state.t0) / 1000;
-
+  const now = performance.now(), time = (now - state.t0) / 1000;
   if (landmarker && els.cam.readyState >= 2) {
     const res = landmarker.detectForVideo(els.cam, now);
     if (res.faceLandmarks && res.faceLandmarks.length) state.lastFace = res.faceLandmarks[0];
   }
   readAudio();
-
-  if (!analyser && now - state.t0 > state.autoBurstAt) {
-    triggerBurst(0.8); state.autoBurstAt = (now - state.t0) + 7000 + Math.random() * 4000;
-  }
+  if (!analyser && now - state.t0 > state.autoBurstAt) { triggerBurst(0.8); state.autoBurstAt = (now - state.t0) + 7000 + Math.random() * 4000; }
   state.burst *= 0.94; state.chroma *= 0.85;
 
-  const face = state.lastFace;
-  if (face && positions) {
-    const burst = state.burst, swell = 1 + state.audio * 0.18;
-    for (let i = 0; i < N; i++) {
-      const p = plan[i];
-      lmToWorld(face[p.a], A);
-      if (p.b !== p.a) {
-        lmToWorld(face[p.b], B);
-        A.x += (B.x - A.x) * p.t; A.y += (B.y - A.y) * p.t; A.z += (B.z - A.z) * p.t;
-      }
-      const sh = Math.sin(time * 2.0 + p.phase) * 0.012;
-      let x = A.x * swell, y = A.y * swell, z = A.z * swell + sh;
-      if (burst > 0.001) {
-        const e = burst * burst, len = Math.hypot(A.x, A.y) + 1e-4;
-        x += (A.x / len) * e * 0.5 + p.sx * e * 0.55;
-        y += (A.y / len) * e * 0.5 + p.sy * e * 0.55 + e * 0.12;
-        z += p.sz * e * 0.55;
-      }
-      const o = i * 3; positions[o] = x; positions[o + 1] = y; positions[o + 2] = z;
-      const la = face[p.a], lb = (p.b !== p.a) ? face[p.b] : la, u = i * 2;
-      uvs[u] = la.x + (lb.x - la.x) * p.t;
-      uvs[u + 1] = la.y + (lb.y - la.y) * p.t;
-    }
-    geo.attributes.position.needsUpdate = true;
-    geo.attributes.aUv.needsUpdate = true;
-    points.rotation.y = Math.sin(time * 0.25) * 0.18;
-  }
-
-  if (mat) mat.uniforms.uAudio.value = state.audio;
-  chroma.uniforms.uAmount.value = state.chroma * 0.006;
-  composer.render();
+  computePoints(time);
+  if (MODE === "gpu") renderGPU(time); else renderCPU(time);
 }
 
 // ---------------------------------------------------------------------------
@@ -460,55 +506,50 @@ async function start() {
   setTimeout(() => (els.intro.style.display = "none"), 600);
   els.load.classList.add("show");
 
-  // 1. camera first — keeps the iOS user-gesture intact and prompts instantly
+  // 1. camera first (keeps iOS user-gesture intact)
   let stream;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      audio: false, video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
-    });
+    stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } } });
   } catch (e) {
     booting = false;
-    return showError(
-      e && e.name === "NotAllowedError" ? "Camera blocked" : "No camera",
+    return showError(e && e.name === "NotAllowedError" ? "Camera blocked" : "No camera",
       e && e.name === "NotAllowedError"
         ? "GEECKET needs the camera to draw you — allow it and hit RETRY. Nothing is uploaded."
-        : "Couldn't reach a camera here. Try another device or browser."
-    );
+        : "Couldn't reach a camera here. Try another device or browser.");
   }
   els.cam.srcObject = stream;
   await els.cam.play().catch(() => {});
   await new Promise((r) => { if (els.cam.videoWidth) return r(); els.cam.onloadedmetadata = () => r(); });
   camAspect = (els.cam.videoWidth / els.cam.videoHeight) || 1;
 
-  // 2. load 3D libs (dynamic — failures show on screen, never a dead button)
-  try { await loadLibs(); }
-  catch (e) {
-    booting = false;
-    return showError("3D engine blocked",
-      "Couldn't load three.js from the CDN. In Brave, lower the Shield for this site and RETRY — or use Safari/Chrome. (" + (e && e.message || e) + ")");
+  // 2. choose render path by WebGL2 availability — this is the all-users fix
+  MODE = hasWebGL2() ? "gpu" : "cpu";
+
+  if (MODE === "gpu") {
+    try { await loadThree(); initGPU(); }
+    catch (e) { MODE = "cpu"; }       // any GPU hiccup → fall back, never error out
   }
-  try { if (!renderer) initGL(); }
-  catch (e) {
-    booting = false;
-    return showError("WebGL unavailable",
-      "Brave is blocking WebGL. Quick fix: open this link in Safari. To fix Brave: brave://settings/system → turn ON 'Use hardware acceleration', relaunch; and Shield (lion) → set Fingerprint blocking to 'Allow' for this site, then RETRY. (" + (e && e.message || e) + ")");
+  if (MODE === "cpu") {
+    try { initCPU(); }
+    catch (e) { booting = false; return showError("Can't draw here", "This browser blocked both WebGL and 2D canvas. Try Safari or Chrome. (" + (e && e.message || e) + ")"); }
   }
 
-  // 3. face model
+  // 3. face model (delegate matches MODE)
   try { await initFace(); }
   catch (e) {
     booting = false;
-    return showError("Face model blocked",
-      "Couldn't download the face engine (CDN blocked or offline). Lower Brave Shields for this site and RETRY. (" + (e && e.message || e) + ")");
+    return showError("Face engine blocked", "Couldn't download the face model (CDN blocked or offline). In Brave, lower Shields for this site and RETRY. (" + (e && e.message || e) + ")");
   }
-  buildCloud();
 
-  // 4. go live
+  // 4. build + go live
+  buildPlan();
+  if (MODE === "gpu") buildGPUCloud();
   state.t0 = performance.now();
   els.load.classList.remove("show");
   els.hud.classList.add("show");
   els.brand.classList.add("show");
-  showToast("tap = burst · double-tap = glitch · ◉ sound");
+  els.modeTag.textContent = MODE === "cpu" ? "· lite" : "";
+  showToast(MODE === "cpu" ? "lite mode · tap = burst · ◉ sound" : "tap = burst · double-tap = glitch · ◉ sound");
   if (!looping) { looping = true; frame(); }
 }
 </script>
