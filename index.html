@@ -15,9 +15,16 @@
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   html,body{margin:0;height:100%;background:var(--ink);overflow:hidden;
     font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;color:#fff}
-  #app{position:fixed;inset:0}
+  #app{position:fixed;inset:0;z-index:2}
   canvas{display:block;width:100%;height:100%}
-  #cam{position:absolute;width:2px;height:2px;opacity:0;pointer-events:none;left:-10px;top:-10px}
+  /* video MUST be on-screen + non-zero for iOS to produce frames (issue #3576);
+     it sits behind the opaque render canvas, so it's effectively invisible. */
+  #cam{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;z-index:0;opacity:.001;pointer-events:none}
+  #diag{position:fixed;left:8px;bottom:8px;z-index:40;max-width:94vw;
+    font:11px/1.5 ui-monospace,Menlo,monospace;color:#9ef01a;background:rgba(0,0,0,.74);
+    border:1px solid rgba(158,240,26,.35);border-radius:8px;padding:8px 10px;white-space:pre;
+    pointer-events:none;display:none}
+  #diag.show{display:block}
 
   #fx{position:fixed;inset:0;pointer-events:none;z-index:5;mix-blend-mode:overlay;opacity:.5;
     background:repeating-linear-gradient(0deg, rgba(0,0,0,0) 0 2px, rgba(0,0,0,.35) 2px 3px);}
@@ -98,6 +105,7 @@
 <div id="load"><div class="ring"></div><div class="lbl" id="loadLbl">summoning the cloud</div></div>
 
 <div id="toast"></div>
+<pre id="diag"></pre>
 
 <div id="hud">
   <button class="btn" id="burstBtn">◇ Burst</button>
@@ -183,7 +191,7 @@ els.look.addEventListener("click", (e) => { e.stopPropagation(); cycleLook(); })
 window.addEventListener("pointerdown", onTap);
 window.__geecketReady = true;
 
-function showError(title, msg) { els.load.classList.remove("show"); $("errTitle").textContent = title; els.errMsg.textContent = msg; els.err.classList.add("show"); }
+function showError(title, msg) { if (!lastErr) lastErr = title; els.load.classList.remove("show"); $("errTitle").textContent = title; els.errMsg.textContent = msg; els.err.classList.add("show"); showDiag(); }
 function showToast(msg) { els.toast.textContent = msg; els.toast.classList.add("show"); clearTimeout(showToast._t); showToast._t = setTimeout(() => els.toast.classList.remove("show"), 1900); }
 function setStatus(s) { const l = $("loadLbl"); if (l) l.textContent = s; }
 function withTimeout(p, ms, label) { return Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error("timed out: " + label)), ms))]); }
@@ -202,6 +210,30 @@ let renderer, scene, camera, composer, bloom, chroma, mat, geo, points, videoTex
 let c2, ctx2d, glowLime, glowPurple, glowBlue, vidCanvas, vidCtx, DPR2 = 1;
 
 const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+const IS_IOS = /iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+  (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);  // iPadOS masquerades as Mac
+let lastTs = 0, lastErr = "";
+
+// ---- on-device diagnostic: one screenshot tells us exactly what's wrong ----
+async function runDiag() {
+  const el = $("diag"); if (!el) return;
+  let cams = "?", perm = "?";
+  try { cams = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "videoinput").length; } catch (_) {}
+  try { perm = (await navigator.permissions.query({ name: "camera" })).state; } catch (_) { perm = "n/a"; }
+  const v = els.cam;
+  el.textContent =
+    "GEECKET diag\n" +
+    "secure:" + window.isSecureContext + "  gUM:" + !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) + "\n" +
+    "perm:" + perm + "  cams:" + cams + "\n" +
+    "video: rs" + (v ? v.readyState : "?") + " " + (v ? v.videoWidth : "?") + "x" + (v ? v.videoHeight : "?") +
+      " active:" + (v && v.srcObject ? v.srcObject.active : "-") + "\n" +
+    "mode:" + MODE + " webgl2:" + hasWebGL2() + " ios:" + IS_IOS + "\n" +
+    "three:" + (typeof THREE === "undefined" ? "no" : "yes") + " face:" + (landmarker ? "ok" : "-") +
+      " seen:" + (state.lastFace ? "Y" : "n") + "\n" +
+    "err:" + (lastErr || "-") + "\n" +
+    "ua:" + navigator.userAgent.slice(0, 48);
+}
+function showDiag() { const el = $("diag"); if (el) el.classList.add("show"); runDiag(); if (!showDiag._t) showDiag._t = setInterval(runDiag, 1500); }
 
 // ---------------------------------------------------------------------------
 function hasWebGL2() {
@@ -439,7 +471,8 @@ async function initFace() {
   FilesetResolver = mp.FilesetResolver; FaceLandmarker = mp.FaceLandmarker;
   const fileset = await FilesetResolver.forVisionTasks(dir);
   landmarker = await FaceLandmarker.createFromOptions(fileset, {
-    baseOptions: { modelAssetPath: f("face_landmarker.task"), delegate: MODE === "gpu" ? "GPU" : "CPU" },
+    // iOS Safari's GPU delegate is flaky for FaceLandmarker (issue #6142) → CPU on iOS
+    baseOptions: { modelAssetPath: f("face_landmarker.task"), delegate: (MODE === "gpu" && !IS_IOS) ? "GPU" : "CPU" },
     outputFaceBlendshapes: false, runningMode: "VIDEO", numFaces: 1,
   });
 }
@@ -488,9 +521,13 @@ function cycleLook() {
 function frame() {
   requestAnimationFrame(frame);
   const now = performance.now(), time = (now - state.t0) / 1000;
-  if (landmarker && els.cam.readyState >= 2) {
-    const res = landmarker.detectForVideo(els.cam, now);
-    if (res.faceLandmarks && res.faceLandmarks.length) state.lastFace = res.faceLandmarks[0];
+  if (landmarker && els.cam.readyState >= 2 && els.cam.videoWidth > 0) {
+    // timestamp MUST strictly increase — a duplicate bricks MediaPipe permanently
+    let ts = now; if (ts <= lastTs) ts = lastTs + 1; lastTs = ts;
+    try {
+      const res = landmarker.detectForVideo(els.cam, ts);
+      if (res.faceLandmarks && res.faceLandmarks.length) state.lastFace = res.faceLandmarks[0];
+    } catch (e) { /* keep last good face; never kill the loop */ }
   }
   readAudio();
   if (!analyser && now - state.t0 > state.autoBurstAt) { triggerBurst(0.8); state.autoBurstAt = (now - state.t0) + 7000 + Math.random() * 4000; }
@@ -524,7 +561,7 @@ async function acquireCamera() {
 function camMessage(e) {
   const n = (e && e.name) || "";
   if (n === "NotAllowedError" || n === "SecurityError")
-    return ["Camera blocked", "Allow the camera for this site, then RETRY — nothing is uploaded. (Brave: click the camera icon in the address bar → Allow.)"];
+    return ["Camera blocked", "Permission is denied for this site. iPhone Safari: tap 'aA' in the address bar → Website Settings → Camera → Allow (or Settings ▸ Safari ▸ Camera → Allow), then reload. Desktop: click the camera icon in the address bar → Allow. Nothing is uploaded."];
   if (n === "NotReadableError" || n === "TrackStartError" || n === "AbortError")
     return ["Camera busy", "Another app or tab is using the camera. Close other camera tabs (incl. GEECKET STUDIO), and Zoom / FaceTime / Photo Booth, then RETRY."];
   if (n === "NotFoundError" || n === "DevicesNotFoundError" || n === "OverconstrainedError")
@@ -539,21 +576,33 @@ async function start() {
   els.intro.style.opacity = "0";
   setTimeout(() => (els.intro.style.display = "none"), 600);
   els.load.classList.add("show");
+  lastErr = "";
+  showDiag();   // live readout from the first moment, so a stall is never silent
 
-  // 1. camera first (keeps iOS user-gesture intact)
+  // 1. camera first (keeps iOS user-gesture intact — no await before getUserMedia)
   setStatus("requesting camera…");
   let stream;
   try {
     stream = await acquireCamera();
   } catch (e) {
     booting = false;
+    lastErr = (e && e.name || "") + (e && e.message ? " " + e.message : "");
     const [t, m] = camMessage(e);
     return showError(t, m);
   }
   setStatus("waking video…");
   els.cam.srcObject = stream;
   await els.cam.play().catch(() => {});
-  await withTimeout(new Promise((r) => { if (els.cam.videoWidth) return r(); els.cam.onloadedmetadata = () => r(); }), 8000, "video").catch(() => {});
+  // wait for ACTUAL frames (videoWidth>0 && readyState>=2), not just metadata
+  await withTimeout(new Promise((r) => {
+    const check = () => { if (els.cam.videoWidth > 0 && els.cam.readyState >= 2) r(); else requestAnimationFrame(check); };
+    check();
+  }), 9000, "video frames").catch(() => {});
+  if (!els.cam.videoWidth) {
+    booting = false;
+    lastErr = "no-frames rs" + els.cam.readyState;
+    return showError("Camera gave no image", "The camera connected but sent no video (it may be in use by another app, or the browser blocked frames). Close other camera apps/tabs and RETRY, or try Safari/Chrome.");
+  }
   camAspect = (els.cam.videoWidth / els.cam.videoHeight) || 1;
 
   // 2. choose render path by WebGL2 availability — this is the all-users fix
@@ -576,6 +625,7 @@ async function start() {
   catch (e) {
     booting = false;
     const m = (e && e.message || e) + "";
+    lastErr = "face: " + m.slice(0, 40);
     return showError("Face engine failed",
       (m.indexOf("timed out") >= 0 ? "The face engine took too long to load on this connection. " : "Couldn't start the face engine. ") +
       "Try a stronger Wi-Fi/data connection and RETRY. (" + m + ")");
