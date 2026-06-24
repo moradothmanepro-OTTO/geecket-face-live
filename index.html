@@ -65,6 +65,9 @@
     padding:11px 16px;border-radius:999px;cursor:pointer;transition:all .18s ease}
   .btn:active{transform:scale(.95)}
   .btn.on{color:var(--lime);border-color:rgba(198,255,58,.5);background:rgba(198,255,58,.08)}
+  #recBtn.on{color:#ff5a5a;border-color:rgba(255,90,90,.6);background:rgba(255,90,90,.14);
+    animation:recpulse 1.1s ease-in-out infinite}
+  @keyframes recpulse{0%,100%{opacity:1}50%{opacity:.55}}
   #brand{position:fixed;top:env(safe-area-inset-top);left:0;right:0;z-index:12;display:none;
     justify-content:center;padding:18px;pointer-events:none}
   #brand.show{display:flex}
@@ -108,6 +111,7 @@
 <pre id="diag"></pre>
 
 <div id="hud">
+  <button class="btn" id="recBtn">● Rec</button>
   <button class="btn" id="burstBtn">◇ Burst</button>
   <button class="btn" id="soundBtn">◉ Sound</button>
   <button class="btn" id="lookBtn">↻ Look</button>
@@ -179,7 +183,7 @@ const $ = (id) => document.getElementById(id);
 const els = {
   cam: $("cam"), intro: $("intro"), load: $("load"), hud: $("hud"), brand: $("brand"),
   toast: $("toast"), err: $("err"), errMsg: $("errMsg"), modeTag: $("modeTag"),
-  enter: $("enterBtn"), retry: $("retryBtn"), burst: $("burstBtn"), sound: $("soundBtn"), look: $("lookBtn"),
+  enter: $("enterBtn"), retry: $("retryBtn"), burst: $("burstBtn"), sound: $("soundBtn"), look: $("lookBtn"), rec: $("recBtn"),
 };
 
 // ---- wire the gate BEFORE anything that can throw ----
@@ -188,6 +192,7 @@ els.retry.addEventListener("click", () => { els.err.classList.remove("show"); st
 els.burst.addEventListener("click", (e) => { e.stopPropagation(); triggerBurst(1); });
 els.sound.addEventListener("click", (e) => { e.stopPropagation(); toggleSound(); });
 els.look.addEventListener("click", (e) => { e.stopPropagation(); cycleLook(); });
+els.rec.addEventListener("click", (e) => { e.stopPropagation(); toggleRec(); });
 window.addEventListener("pointerdown", onTap);
 window.__geecketReady = true;
 
@@ -200,6 +205,8 @@ function withTimeout(p, ms, label) { return Promise.race([p, new Promise((_, rej
 let THREE, EffectComposer, RenderPass, UnrealBloomPass, ShaderPass, OutputPass, FaceLandmarker, FilesetResolver;
 let MODE = "gpu";                 // "gpu" | "cpu"
 let landmarker = null, analyser = null, freqData = null, prevBass = 0, camAspect = 1;
+let audioCtx = null, micDest = null, micStream = null;
+let rec = null, recCanvas = null, recCtx = null, recChunks = [], recording = false;
 let plan = null, positions = null, uvs = null, N = 0;
 let booting = false, looping = false;
 const state = { burst: 0, audio: 0, chroma: 0, lastFace: null, t0: 0, autoBurstAt: 8000 };
@@ -332,9 +339,14 @@ function buildGPUCloud() {
 function renderGPU(time) {
   geo.attributes.position.needsUpdate = true;
   geo.attributes.aUv.needsUpdate = true;
-  points.rotation.y = Math.sin(time * 0.25) * 0.18;
-  mat.uniforms.uAudio.value = state.audio;
-  chroma.uniforms.uAmount.value = state.chroma * 0.006;
+  // bass sways the camera + spins faster on energy
+  const a = state.audio, beat = state.beat || 0;
+  points.rotation.y = Math.sin(time * 0.25) * 0.18 + a * 0.12;
+  mat.uniforms.uAudio.value = a;
+  // bloom pumps with bass + kick; chroma split is the beat weapon (treble adds bite)
+  const L = LOOKS[lookIdx];
+  bloom.strength = (IS_MOBILE ? 0.7 : 0.95) * (L.bloom / 0.95) * (1 + a * 0.9 + beat * 0.8);
+  chroma.uniforms.uAmount.value = (state.chroma * 0.006) + beat * 0.004 + (state.treble || 0) * 0.001;
   composer.render();
 }
 
@@ -399,9 +411,11 @@ function renderCPU(time) {
   try { vidCtx.drawImage(els.cam, 0, 0, 120, 120); data = vidCtx.getImageData(0, 0, 120, 120).data; } catch (_) {}
 
   const L = LOOKS[lookIdx];
+  const beat = state.beat || 0;
   const scale = Math.min(W, H) * 0.42;
-  const yaw = Math.sin(time * 0.25) * 0.18, cy = Math.cos(yaw), sy = Math.sin(yaw);
-  const sizeMul = L.size * 1.5 * DPR2 * (1 + state.audio * 0.9);
+  const yaw = Math.sin(time * 0.25) * 0.18 + state.audio * 0.12, cy = Math.cos(yaw), sy = Math.sin(yaw);
+  const sizeMul = L.size * 1.5 * DPR2 * (1 + state.audio * 1.1 + beat * 0.7);
+  const aBoost = beat * 0.22;
 
   for (let i = 0; i < N; i++) {
     const o = i * 3;
@@ -426,7 +440,7 @@ function renderCPU(time) {
     else sprite = lum > 0.72 ? glowPurple : glowLime;
 
     const sz = sizeMul * persp * (0.55 + lum);
-    ctx2d.globalAlpha = Math.min(1, 0.22 + lum * 0.85);
+    ctx2d.globalAlpha = Math.min(1, 0.22 + lum * 0.85 + aBoost);
     ctx2d.drawImage(sprite, px - sz, py - sz, sz * 2, sz * 2);
   }
   ctx2d.globalAlpha = 1;
@@ -496,23 +510,43 @@ async function initFace() {
 
 // ---- mic reactivity ----
 async function toggleSound() {
-  if (analyser) { analyser = null; els.sound.classList.remove("on"); return; }
+  if (analyser) {  // turn OFF
+    analyser = null;
+    if (micStream) micStream.getTracks().forEach((t) => t.stop());
+    micStream = null; els.sound.classList.remove("on");
+    showToast("sound off"); return;
+  }
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const ac = new (window.AudioContext || window.webkitAudioContext)();
-    const src = ac.createMediaStreamSource(stream);
-    analyser = ac.createAnalyser(); analyser.fftSize = 1024; src.connect(analyser);
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") await audioCtx.resume();   // CRITICAL: starts suspended
+    const src = audioCtx.createMediaStreamSource(micStream);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 1024; analyser.smoothingTimeConstant = 0.7;
+    src.connect(analyser);
+    micDest = audioCtx.createMediaStreamDestination();   // tap for recording the sound
+    src.connect(micDest);
     freqData = new Uint8Array(analyser.frequencyBinCount);
-    els.sound.classList.add("on"); showToast("listening — play your beat");
-  } catch (e) { showToast("mic blocked"); }
+    els.sound.classList.add("on");
+    showToast("listening — play your beat near the mic");
+  } catch (e) { showToast("mic blocked — allow microphone"); }
 }
+// bass/mid/treble + onset → strong, punchy reactivity (expert-tuned bands)
 function readAudio() {
-  if (!analyser) { state.audio *= 0.92; return; }
+  if (!analyser) { state.audio *= 0.9; state.treble = (state.treble || 0) * 0.9; state.beat = (state.beat || 0) * 0.85; return; }
   analyser.getByteFrequencyData(freqData);
-  let b = 0; for (let i = 0; i < 8; i++) b += freqData[i]; b = b / (8 * 255);
-  const onset = Math.max(0, b - prevBass); prevBass = b;
-  state.audio += (b - state.audio) * 0.3;
-  if (onset > 0.12) { triggerBurst(0.55); state.chroma = Math.min(1, state.chroma + onset * 2.5); }
+  const n = freqData.length;
+  let bass = 0, mid = 0, tre = 0;
+  const bEnd = (n * 0.08) | 0, mEnd = (n * 0.4) | 0;
+  for (let i = 0; i < n; i++) { const v = freqData[i]; if (i < bEnd) bass += v; else if (i < mEnd) mid += v; else tre += v; }
+  bass = bass / (bEnd * 255); mid = mid / ((mEnd - bEnd) * 255); tre = tre / ((n - mEnd) * 255);
+  const onset = Math.max(0, bass - prevBass); prevBass = bass;
+  // smoothed levels
+  state.audio += (bass - state.audio) * 0.35;           // bass → swell/size/bloom
+  state.treble = (state.treble || 0) * 0.6 + tre * 0.4; // treble → shimmer/jitter
+  // kick onset → beat pulse (decays), drives chroma split + scatter burst
+  if (onset > 0.10) { state.beat = 1; triggerBurst(0.35 + onset * 1.5); state.chroma = Math.min(1, state.chroma + 0.6 + onset * 3); }
+  state.beat = (state.beat || 0) * 0.82;
 }
 
 // ---- interactions ----
@@ -532,6 +566,48 @@ function cycleLook() {
     bloom.strength = (IS_MOBILE ? 0.75 : 1.0) * (L.bloom / 0.95);
   }
   showToast(L.name);
+}
+
+// ---- recording: capture the live canvas (+ mic/music) → download ----
+function pickMime() {
+  const c = ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm", "video/mp4;codecs=h264,aac", "video/mp4"];
+  for (const m of c) if (window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m;
+  return "";
+}
+function toggleRec() {
+  if (!looping) { showToast("not live yet"); return; }
+  if (recording) { if (rec && rec.state !== "inactive") rec.stop(); return; }
+  const cv = (MODE === "gpu" && renderer) ? renderer.domElement : c2;
+  if (!cv || !cv.captureStream) { showToast("recording not supported here"); return; }
+  let combined;
+  try {
+    const vs = cv.captureStream(30);
+    combined = new MediaStream();
+    vs.getVideoTracks().forEach((t) => combined.addTrack(t));
+    if (micDest) micDest.stream.getAudioTracks().forEach((t) => combined.addTrack(t)); // sound, if mic is on
+  } catch (e) { showToast("can't capture canvas"); return; }
+  const mime = pickMime();
+  try { rec = new MediaRecorder(combined, mime ? { mimeType: mime } : undefined); }
+  catch (e) { showToast("recorder unsupported on this browser"); return; }
+  recChunks = [];
+  rec.ondataavailable = (e) => { if (e.data && e.data.size) recChunks.push(e.data); };
+  rec.onstop = () => {
+    recording = false; clearTimeout(toggleRec._t);
+    els.rec.classList.remove("on"); els.rec.textContent = "● Rec";
+    const base = (mime || "video/webm").split(";")[0];
+    const ext = base.indexOf("mp4") >= 0 ? "mp4" : "webm";
+    const blob = new Blob(recChunks, { type: base });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = "geecket-" + Date.now() + "." + ext;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    showToast("saved " + ext.toUpperCase() + " → check downloads");
+  };
+  rec.start(120);          // small timeslice keeps memory low
+  recording = true;
+  els.rec.classList.add("on"); els.rec.textContent = "■ Stop";
+  showToast(micDest ? "recording — with sound" : "recording — tap ◉ Sound first to capture audio");
+  toggleRec._t = setTimeout(() => { if (recording && rec && rec.state !== "inactive") rec.stop(); }, 30000); // 30s cap
 }
 
 // ---------------------------------------------------------------------------
